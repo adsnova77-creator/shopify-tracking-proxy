@@ -4,7 +4,11 @@
  * Haalt officiële Shopify tracking tokens op via de Storefront API.
  * Zet _shopify_y (uniqueToken) en _shopify_s (visitToken) als cookies.
  * Vereist voor Live View in headless storefronts.
+ *
+ * Endpoint: GET/POST /api/tracking-init
  */
+
+export const config = { runtime: 'edge' };
 
 const SHOPIFY_UNIQUE_TOKEN_HEADER = 'Shopify-Unique-Token';
 const SHOPIFY_VISIT_TOKEN_HEADER = 'Shopify-Visit-Token';
@@ -52,7 +56,7 @@ function getCorsHeaders(request) {
   };
 }
 
-export default async function handler(request) {
+async function handleRequest(request) {
   const corsHeaders = getCorsHeaders(request);
 
   if (request.method === 'OPTIONS') {
@@ -137,4 +141,17 @@ export default async function handler(request) {
       { status: 500, headers: corsHeaders }
     );
   }
+}
+
+// Vercel: named exports voor GET/POST
+export async function GET(request) {
+  return handleRequest(request);
+}
+
+export async function POST(request) {
+  return handleRequest(request);
+}
+
+export async function OPTIONS(request) {
+  return handleRequest(request);
 }
