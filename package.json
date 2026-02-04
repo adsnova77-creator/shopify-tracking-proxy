@@ -1,0 +1,10 @@
+{
+  "name": "shopify-tracking-proxy",
+  "version": "1.0.0",
+  "description": "Serverless proxy voor officiële Shopify tracking cookies (Live View)",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}
