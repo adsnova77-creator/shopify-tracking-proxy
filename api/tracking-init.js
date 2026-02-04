@@ -1,5 +1,5 @@
 /**
- * Shopify Tracking Init – Vercel Serverless Function
+ * Shopify Tracking Init – Vercel Serverless Function (Node.js)
  *
  * Haalt officiële Shopify tracking tokens op via de Storefront API.
  * Zet _shopify_y (uniqueToken) en _shopify_s (visitToken) als cookies.
@@ -7,8 +7,6 @@
  *
  * Endpoint: GET/POST /api/tracking-init
  */
-
-export const config = { runtime: 'edge' };
 
 const SHOPIFY_UNIQUE_TOKEN_HEADER = 'Shopify-Unique-Token';
 const SHOPIFY_VISIT_TOKEN_HEADER = 'Shopify-Visit-Token';
@@ -43,11 +41,10 @@ function getAllowedOrigins() {
   return env.split(',').map((o) => o.trim()).filter(Boolean);
 }
 
-function getCorsHeaders(request) {
-  const origin = request.headers.get('origin') || '';
+function getCorsHeaders(req) {
+  const origin = req.headers.origin || req.headers.referer || '';
   const allowed = getAllowedOrigins();
-  const allowOrigin = allowed.length && allowed.includes(origin) ? origin : (allowed[0] || '*');
-
+  const allowOrigin = allowed.length && origin && allowed.includes(origin) ? origin : (allowed[0] || '*');
   return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -56,18 +53,23 @@ function getCorsHeaders(request) {
   };
 }
 
-async function handleRequest(request) {
-  const corsHeaders = getCorsHeaders(request);
+function sendJson(res, status, data, corsHeaders) {
+  res.writeHead(status, { ...corsHeaders, 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
 
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsHeaders });
+export default async function handler(req, res) {
+  const corsHeaders = getCorsHeaders(req);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, corsHeaders);
+    res.end();
+    return;
   }
 
-  if (request.method !== 'GET' && request.method !== 'POST') {
-    return Response.json(
-      { error: 'Method not allowed' },
-      { status: 405, headers: corsHeaders }
-    );
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' }, corsHeaders);
+    return;
   }
 
   const storeDomain = process.env.SHOPIFY_STORE_DOMAIN;
@@ -75,20 +77,18 @@ async function handleRequest(request) {
   const cookieDomain = process.env.COOKIE_DOMAIN || '';
 
   if (!storeDomain || !token) {
-    console.error('Missing SHOPIFY_STORE_DOMAIN or SHOPIFY_STOREFRONT_TOKEN');
-    return Response.json(
-      { error: 'Server misconfigured' },
-      { status: 500, headers: corsHeaders }
-    );
+    sendJson(res, 500, { error: 'Server misconfigured: set SHOPIFY_STORE_DOMAIN and SHOPIFY_STOREFRONT_TOKEN in Vercel' }, corsHeaders);
+    return;
   }
 
-  const cookieHeader = request.headers.get('cookie') || '';
+  const cookieHeader = req.headers.cookie || '';
   let uniqueToken = getCookieValue(cookieHeader, '_shopify_y');
   let visitToken = getCookieValue(cookieHeader, '_shopify_s');
   if (!uniqueToken) uniqueToken = generateUUID();
   if (!visitToken) visitToken = generateUUID();
 
-  const apiUrl = `https://${storeDomain.replace(/^https?:\/\//, '').replace(/\/$/, '')}/api/2026-01/graphql.json`;
+  const cleanDomain = storeDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const apiUrl = `https://${cleanDomain}/api/2024-10/graphql.json`;
 
   try {
     const response = await fetch(apiUrl, {
@@ -112,46 +112,22 @@ async function handleRequest(request) {
     const finalUniqueToken = tracking._y || uniqueToken;
     const finalVisitToken = tracking._s || visitToken;
 
-    const url = new URL(request.url);
-    const isSecure =
-      url.protocol === 'https:' || request.headers.get('x-forwarded-proto') === 'https';
+    const isSecure = req.headers['x-forwarded-proto'] === 'https';
+    const setCookieY = `_shopify_y=${encodeURIComponent(finalUniqueToken)}; Max-Age=31536000; Path=/; SameSite=Lax${isSecure ? '; Secure' : ''}${cookieDomain ? `; Domain=${cookieDomain}` : ''}`;
+    const setCookieS = `_shopify_s=${encodeURIComponent(finalVisitToken)}; Max-Age=1800; Path=/; SameSite=Lax${isSecure ? '; Secure' : ''}${cookieDomain ? `; Domain=${cookieDomain}` : ''}`;
 
-    const headers = new Headers(corsHeaders);
-    headers.set(
-      'Set-Cookie',
-      `_shopify_y=${encodeURIComponent(finalUniqueToken)}; Max-Age=31536000; Path=/; SameSite=Lax${isSecure ? '; Secure' : ''}${cookieDomain ? `; Domain=${cookieDomain}` : ''}`
-    );
-    headers.append(
-      'Set-Cookie',
-      `_shopify_s=${encodeURIComponent(finalVisitToken)}; Max-Age=1800; Path=/; SameSite=Lax${isSecure ? '; Secure' : ''}${cookieDomain ? `; Domain=${cookieDomain}` : ''}`
-    );
-    headers.set('Cache-Control', 'no-store');
-
-    return Response.json(
-      {
-        uniqueToken: finalUniqueToken,
-        visitToken: finalVisitToken,
-      },
-      { headers }
-    );
+    res.writeHead(200, {
+      ...corsHeaders,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      'Set-Cookie': [setCookieY, setCookieS],
+    });
+    res.end(JSON.stringify({
+      uniqueToken: finalUniqueToken,
+      visitToken: finalVisitToken,
+    }));
   } catch (err) {
     console.error('Tracking init error:', err);
-    return Response.json(
-      { error: 'Failed to initialize tracking' },
-      { status: 500, headers: corsHeaders }
-    );
+    sendJson(res, 500, { error: 'Failed to initialize tracking', detail: err.message }, corsHeaders);
   }
-}
-
-// Vercel: named exports voor GET/POST
-export async function GET(request) {
-  return handleRequest(request);
-}
-
-export async function POST(request) {
-  return handleRequest(request);
-}
-
-export async function OPTIONS(request) {
-  return handleRequest(request);
 }
